@@ -22,12 +22,13 @@ All curl commands to the cluster use `-sk -u elastic:$ES_PASS` (self-signed cert
 
 ## Indexes
 
-Two indexes live in `indexes/`:
+Three indexes live in `indexes/`:
 
 | Index | Events | Purpose |
 |-------|--------|---------|
 | `forensics` | 5 | Real Suricata IDS alerts (ECS format via Logstash) |
 | `test_rat` | 36 | Synthetic financial RAT simulation, 6 attack phases |
+| `rat_scored` | 31 | MediBank RAT campaign with additive composite risk scoring (0–200), 7 attack phases |
 
 Each index directory contains:
 - `events.ndjson` — Elasticsearch `_bulk` format, ready to POST directly
@@ -42,6 +43,7 @@ Each index directory contains:
 source .env
 ES_PASS=$ES_PASS bash indexes/forensics/setup.sh
 ES_PASS=$ES_PASS bash indexes/test_rat/setup.sh
+ES_PASS=$ES_PASS bash indexes/rat_scored/setup.sh
 ```
 
 ### Updating a dashboard
