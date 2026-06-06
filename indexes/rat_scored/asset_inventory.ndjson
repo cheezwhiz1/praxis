@@ -1,0 +1,14 @@
+{"index":{"_index":"asset_inventory"}}
+{"ip":"10.20.5.20","asset_criticality":50,"asset_type":"payment_server","description":"PCI-CDE payment processing server"}
+{"index":{"_index":"asset_inventory"}}
+{"ip":"10.20.5.30","asset_criticality":45,"asset_type":"database_server","description":"Patient and financial records database"}
+{"index":{"_index":"asset_inventory"}}
+{"ip":"10.20.1.200","asset_criticality":45,"asset_type":"exec_workstation","description":"CFO workstation — full financial access"}
+{"index":{"_index":"asset_inventory"}}
+{"ip":"10.20.0.10","asset_criticality":40,"asset_type":"domain_controller","description":"Active Directory domain controller"}
+{"index":{"_index":"asset_inventory"}}
+{"ip":"10.20.1.92","asset_criticality":30,"asset_type":"finance_workstation","description":"Finance department workstation"}
+{"index":{"_index":"asset_inventory"}}
+{"ip":"10.20.1.95","asset_criticality":30,"asset_type":"finance_workstation","description":"Finance department workstation 2"}
+{"index":{"_index":"asset_inventory"}}
+{"ip":"10.20.1.88","asset_criticality":15,"asset_type":"user_workstation","description":"Standard end-user workstation (patient zero)"}

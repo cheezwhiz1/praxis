@@ -1,14 +1,10 @@
 #!/usr/bin/env python3
 """
 Generate RAT_SCORED index: APT-grade financial RAT targeting a healthcare credit union.
-Each event carries the four composite-score components plus the additive composite.
 
-Score model:
-  base_alert_severity : 0-60  (SIEM signature confidence)
-  asset_criticality   : 0-50  (operational importance / PCI classification)
-  pii_exposure_tier   : 0-50  (4-tier PII taxonomy: Tier4=5 Tier3=15 Tier2=35 Tier1=50)
-  attack_complexity   : 10-40 (distinct MITRE tactic/technique pairs in 4-h window)
-  composite           : 10-200 (additive sum)
+Score fields (base_alert_severity, asset_criticality, pii_exposure_tier,
+attack_complexity, composite) are NOT set here — they are computed at index
+time by the 'rat-scoring-pipeline' ES ingest pipeline defined in setup.sh.
 """
 import json
 import random
@@ -52,11 +48,8 @@ def event(
     former_category, flowbits, vlan, iface, sensor, rule_category,
     attack_phase, correlation_id,
     src_bytes=0, dst_bytes=0, src_packets=1, dst_packets=0,
-    pii_type=None, response="Allow",
-    base_alert_severity=0, asset_criticality=0,
-    pii_exposure_tier=0, attack_complexity=10
+    pii_type=None, response="Allow"
 ):
-    composite = base_alert_severity + asset_criticality + pii_exposure_tier + attack_complexity
     e = {
         "@timestamp": timestamp,
         "source": {
@@ -96,14 +89,7 @@ def event(
             "attack_target": ["Healthcare Financial Systems"],
             "correlation_id": correlation_id
         },
-        "custom": {"str1": attack_phase},
-        "score": {
-            "base_alert_severity": base_alert_severity,
-            "asset_criticality": asset_criticality,
-            "pii_exposure_tier": pii_exposure_tier,
-            "attack_complexity": attack_complexity,
-            "composite": composite
-        }
+        "custom": {"str1": attack_phase}
     }
     if pii_type:
         e["metadata"]["pii_type"] = pii_type
@@ -121,7 +107,6 @@ events.append(event(
     1100, "mon0", SENSOR, "A Network Trojan was Detected",
     "initial_access", CORR_W1,
     src_bytes=512, dst_bytes=307200,
-    base_alert_severity=50, asset_criticality=15, pii_exposure_tier=5, attack_complexity=10
 ))
 
 events.append(event(
@@ -132,7 +117,6 @@ events.append(event(
     1100, "mon0", SENSOR, "A Network Trojan was Detected",
     "initial_access", CORR_W1,
     src_bytes=256, dst_bytes=614400,
-    base_alert_severity=52, asset_criticality=15, pii_exposure_tier=5, attack_complexity=10
 ))
 
 # ── Phase 2: C2 Establishment (T+0h to T+4h) ─────────────────────────────────
@@ -144,7 +128,6 @@ events.append(event(
     1100, "mon0", SENSOR, "A Network Trojan was Detected",
     "c2_establishment", CORR_W1,
     src_bytes=1024, dst_bytes=8192,
-    base_alert_severity=55, asset_criticality=15, pii_exposure_tier=5, attack_complexity=15
 ))
 
 events.append(event(
@@ -155,7 +138,6 @@ events.append(event(
     1100, "mon0", SENSOR, "A Network Trojan was Detected",
     "c2_establishment", CORR_W1,
     src_bytes=2048, dst_bytes=2097152,
-    base_alert_severity=54, asset_criticality=15, pii_exposure_tier=5, attack_complexity=15
 ))
 
 events.append(event(
@@ -166,7 +148,6 @@ events.append(event(
     1100, "mon0", SENSOR, "A Network Trojan was Detected",
     "c2_establishment", CORR_W1,
     src_bytes=380, dst_bytes=192,
-    base_alert_severity=42, asset_criticality=15, pii_exposure_tier=5, attack_complexity=15
 ))
 
 events.append(event(
@@ -177,7 +158,6 @@ events.append(event(
     1100, "mon0", SENSOR, "A Network Trojan was Detected",
     "c2_establishment", CORR_W1,
     src_bytes=3072, dst_bytes=1024,
-    base_alert_severity=56, asset_criticality=15, pii_exposure_tier=5, attack_complexity=18
 ))
 
 # ── Phase 3: Reconnaissance (T+4h to T+12h) ──────────────────────────────────
@@ -189,7 +169,6 @@ events.append(event(
     1100, "mon0", SENSOR, "Attempted Information Leak",
     "reconnaissance", CORR_W2,
     src_bytes=512, dst_bytes=32768,
-    base_alert_severity=30, asset_criticality=40, pii_exposure_tier=5, attack_complexity=22
 ))
 
 events.append(event(
@@ -200,7 +179,6 @@ events.append(event(
     1100, "mon0", SENSOR, "Attempted Information Leak",
     "reconnaissance", CORR_W2,
     src_bytes=1024, dst_bytes=512,
-    base_alert_severity=28, asset_criticality=20, pii_exposure_tier=5, attack_complexity=22
 ))
 
 events.append(event(
@@ -211,7 +189,6 @@ events.append(event(
     1100, "mon0", SENSOR, "A Network Trojan was Detected",
     "reconnaissance", CORR_W2,
     src_bytes=256, dst_bytes=128,
-    base_alert_severity=42, asset_criticality=50, pii_exposure_tier=15, attack_complexity=25
 ))
 
 events.append(event(
@@ -222,7 +199,6 @@ events.append(event(
     1100, "mon0", SENSOR, "Attempted Information Leak",
     "reconnaissance", CORR_W2,
     src_bytes=512, dst_bytes=256,
-    base_alert_severity=25, asset_criticality=20, pii_exposure_tier=5, attack_complexity=25
 ))
 
 # ── Phase 4: Lateral Movement (T+12h to T+36h) ───────────────────────────────
@@ -234,7 +210,6 @@ events.append(event(
     1100, "mon0", SENSOR, "Attempted User Privilege Gain",
     "lateral_movement", CORR_W3,
     src_bytes=4096, dst_bytes=2048,
-    base_alert_severity=56, asset_criticality=30, pii_exposure_tier=15, attack_complexity=28
 ))
 
 events.append(event(
@@ -245,7 +220,6 @@ events.append(event(
     1100, "mon0", SENSOR, "Potential Corporate Privacy Violation",
     "lateral_movement", CORR_W3,
     src_bytes=8192, dst_bytes=65536,
-    base_alert_severity=45, asset_criticality=30, pii_exposure_tier=15, attack_complexity=28
 ))
 
 events.append(event(
@@ -256,7 +230,6 @@ events.append(event(
     1100, "mon0", SENSOR, "A Network Trojan was Detected",
     "lateral_movement", CORR_W3,
     src_bytes=380, dst_bytes=192,
-    base_alert_severity=55, asset_criticality=30, pii_exposure_tier=15, attack_complexity=30
 ))
 
 events.append(event(
@@ -267,7 +240,6 @@ events.append(event(
     1100, "mon0", SENSOR, "A Network Trojan was Detected",
     "lateral_movement", CORR_W3,
     src_bytes=4096, dst_bytes=32768,
-    base_alert_severity=52, asset_criticality=35, pii_exposure_tier=35, attack_complexity=32
 ))
 
 events.append(event(
@@ -278,7 +250,6 @@ events.append(event(
     1100, "mon0", SENSOR, "Potential Corporate Privacy Violation",
     "lateral_movement", CORR_W3,
     src_bytes=8192, dst_bytes=65536,
-    base_alert_severity=47, asset_criticality=45, pii_exposure_tier=25, attack_complexity=32
 ))
 
 events.append(event(
@@ -289,7 +260,6 @@ events.append(event(
     1100, "mon0", SENSOR, "A Network Trojan was Detected",
     "lateral_movement", CORR_W3,
     src_bytes=380, dst_bytes=192,
-    base_alert_severity=57, asset_criticality=45, pii_exposure_tier=25, attack_complexity=33
 ))
 
 # ── Phase 5: Privilege Escalation (T+36h to T+48h) ───────────────────────────
@@ -301,7 +271,6 @@ events.append(event(
     1100, "mon0", SENSOR, "Attempted User Privilege Gain",
     "privilege_escalation", CORR_W4,
     src_bytes=2048, dst_bytes=16384,
-    base_alert_severity=58, asset_criticality=40, pii_exposure_tier=15, attack_complexity=35
 ))
 
 events.append(event(
@@ -312,7 +281,6 @@ events.append(event(
     1100, "mon0", SENSOR, "Attempted User Privilege Gain",
     "privilege_escalation", CORR_W4,
     src_bytes=4096, dst_bytes=8192,
-    base_alert_severity=58, asset_criticality=40, pii_exposure_tier=15, attack_complexity=35
 ))
 
 events.append(event(
@@ -323,7 +291,6 @@ events.append(event(
     1100, "mon0", SENSOR, "Attempted User Privilege Gain",
     "privilege_escalation", CORR_W4,
     src_bytes=1024, dst_bytes=65536,
-    base_alert_severity=55, asset_criticality=45, pii_exposure_tier=25, attack_complexity=36
 ))
 
 # ── Phase 6: Data Discovery & Credential Harvest (T+48h to T+72h) ────────────
@@ -336,7 +303,6 @@ events.append(event(
     "data_discovery", CORR_W5,
     pii_type="medical_financial_records",
     src_bytes=4096, dst_bytes=10485760,
-    base_alert_severity=55, asset_criticality=35, pii_exposure_tier=35, attack_complexity=37
 ))
 
 events.append(event(
@@ -348,7 +314,6 @@ events.append(event(
     "data_discovery", CORR_W5,
     pii_type="payment_card",
     src_bytes=2048, dst_bytes=20971520,
-    base_alert_severity=60, asset_criticality=50, pii_exposure_tier=50, attack_complexity=38
 ))
 
 events.append(event(
@@ -360,7 +325,6 @@ events.append(event(
     "data_discovery", CORR_W5,
     pii_type="banking_credentials",
     src_bytes=65536, dst_bytes=1024,
-    base_alert_severity=58, asset_criticality=45, pii_exposure_tier=50, attack_complexity=38
 ))
 
 events.append(event(
@@ -372,7 +336,6 @@ events.append(event(
     "data_discovery", CORR_W5,
     pii_type="credit_card",
     src_bytes=32768, dst_bytes=512,
-    base_alert_severity=60, asset_criticality=30, pii_exposure_tier=50, attack_complexity=38
 ))
 
 events.append(event(
@@ -384,7 +347,6 @@ events.append(event(
     "data_discovery", CORR_W5,
     pii_type="ssn_dob_full_identity",
     src_bytes=16384, dst_bytes=512,
-    base_alert_severity=58, asset_criticality=30, pii_exposure_tier=50, attack_complexity=38
 ))
 
 # ── Phase 7: Exfiltration (T+72h to T+120h) ──────────────────────────────────
@@ -397,7 +359,6 @@ events.append(event(
     "exfiltration", CORR_W6,
     pii_type="medical_financial_records",
     src_bytes=20971520, dst_bytes=2048,
-    base_alert_severity=60, asset_criticality=35, pii_exposure_tier=35, attack_complexity=40
 ))
 
 events.append(event(
@@ -409,7 +370,6 @@ events.append(event(
     "exfiltration", CORR_W6,
     pii_type="account_number",
     src_bytes=10485760, dst_bytes=1024,
-    base_alert_severity=60, asset_criticality=30, pii_exposure_tier=50, attack_complexity=40
 ))
 
 events.append(event(
@@ -421,7 +381,6 @@ events.append(event(
     "exfiltration", CORR_W6,
     pii_type="financial_records",
     src_bytes=41943040, dst_bytes=2048,
-    base_alert_severity=58, asset_criticality=45, pii_exposure_tier=50, attack_complexity=40
 ))
 
 events.append(event(
@@ -433,7 +392,6 @@ events.append(event(
     "exfiltration", CORR_W6,
     pii_type="payment_card_full_track",
     src_bytes=104857600, dst_bytes=2048,
-    base_alert_severity=60, asset_criticality=50, pii_exposure_tier=50, attack_complexity=40
 ))
 
 events.append(event(
@@ -444,7 +402,6 @@ events.append(event(
     1200, "mon1", SENSOR2, "A Network Trojan was Detected",
     "exfiltration", CORR_W6,
     src_bytes=1024, dst_bytes=4096,
-    base_alert_severity=55, asset_criticality=50, pii_exposure_tier=15, attack_complexity=40
 ))
 
 events.append(event(
@@ -456,7 +413,6 @@ events.append(event(
     "exfiltration", CORR_W6,
     pii_type="credit_card",
     src_bytes=31457280, dst_bytes=1024,
-    base_alert_severity=60, asset_criticality=30, pii_exposure_tier=50, attack_complexity=40
 ))
 
 events.append(event(
@@ -468,7 +424,6 @@ events.append(event(
     "exfiltration", CORR_W6,
     pii_type="mixed_pii",
     src_bytes=4096, dst_bytes=2048,
-    base_alert_severity=55, asset_criticality=30, pii_exposure_tier=35, attack_complexity=40
 ))
 
 # ── Build bulk payload ─────────────────────────────────────────────────────────
@@ -486,8 +441,3 @@ for phase in ["initial_access", "c2_establishment", "reconnaissance",
     n = sum(1 for e in events if e["custom"]["str1"] == phase)
     print(f"  {phase}: {n} events")
 
-print("\nScore statistics:")
-for field in ["base_alert_severity", "asset_criticality", "pii_exposure_tier",
-              "attack_complexity", "composite"]:
-    vals = [e["score"][field] for e in events]
-    print(f"  {field:25s} min={min(vals):3d}  max={max(vals):3d}  avg={sum(vals)/len(vals):5.1f}")
