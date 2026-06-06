@@ -35,6 +35,7 @@ ES_PASS=your_password
 source .env
 ES_PASS=$ES_PASS bash indexes/forensics/setup.sh
 ES_PASS=$ES_PASS bash indexes/test_rat/setup.sh
+ES_PASS=$ES_PASS bash indexes/rat_scored/setup.sh
 ```
 
 Each script creates the index, inserts events, creates a Kibana data view, and imports the dashboard. Safe to re-run.
@@ -45,8 +46,21 @@ Each script creates the index, inserts events, creates a Kibana data view, and i
 |-------|--------|-----------|
 | `forensics` | 5 Suricata IDS alerts | `/app/dashboards#/view/forensics-dashboard` |
 | `test_rat` | 36 financial RAT simulation events | `/app/dashboards#/view/rat-dashboard` |
+| `rat_scored` | 31 MediBank RAT campaign events | `/app/dashboards#/view/rat-scored-dashboard` |
 
-Both indexes include a `risk_score` runtime field (0–100) computed from severity, risk level, threat category, flowbits, and destination port.
+`forensics` and `test_rat` include a `risk_score` runtime field (0–100) computed from severity, risk level, threat category, flowbits, and destination port.
+
+`rat_scored` uses a four-component additive scoring model stored on each event:
+
+| Field | Range | Description |
+|-------|-------|-------------|
+| `score.base_alert_severity` | 0–60 | SIEM signature confidence |
+| `score.asset_criticality` | 0–50 | Operational importance / PCI classification of target |
+| `score.pii_exposure_tier` | 0–50 | 4-tier PII taxonomy (Tier 4 low → Tier 1 critical) |
+| `score.attack_complexity` | 10–40 | Distinct MITRE ATT&CK tactic/technique pairs in 4-hour window |
+| `score.composite` | 10–200 | Additive sum of all four components |
+
+The dashboard shows five arc gauges on a unified 0–200 scale. The top gauge displays the composite score; the bottom row shows cumulative step-up gauges (base → +asset → +PII → +complexity). Color bands: green 0–80 · yellow 80–140 · red 140–200. Goal line at 160.
 
 ## Logstash Pipelines
 
