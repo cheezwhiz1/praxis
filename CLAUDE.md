@@ -35,7 +35,10 @@ Each index directory contains:
 - `dashboard.ndjson` — Kibana saved objects (16 panels + dashboard), ready to import
 - `setup.sh` — idempotent: drops and recreates the index, inserts events, creates data view, imports dashboard
 - `gen_dashboard.py` — Python script that regenerates `dashboard.ndjson`
-- `gen_events.py` (test_rat only) — Python script that regenerates `events.ndjson`
+- `gen_events.py` (test_rat and rat_scored) — Python script that regenerates `events.ndjson`
+
+`rat_scored` also contains:
+- `asset_inventory.ndjson` — bulk seed data for the `asset_inventory` index (IP → criticality lookup)
 
 ### Re-seeding after a stack rebuild
 
@@ -69,7 +72,7 @@ python3 indexes/test_rat/gen_dashboard.py   # writes to /tmp/rat_dashboard.ndjso
 
 ## Data Schema
 
-Both indexes use [ECS](https://www.elastic.co/guide/en/ecs/current/index.html) field naming. Key fields:
+All indexes use [ECS](https://www.elastic.co/guide/en/ecs/current/index.html) field naming. Key fields:
 
 - `source.ip` / `destination.ip` / `destination.port`
 - `network.transport`
@@ -78,16 +81,31 @@ Both indexes use [ECS](https://www.elastic.co/guide/en/ecs/current/index.html) f
 - `metadata.former_category` — threat category (TROJAN, MALWARE, EXFIL, COMPROMISED, Dshield…)
 - `metadata.flowbits` — ET flowbit tags (ET.Evil, ET.RAT, ET.BotCC…)
 - `observer.hostname` — NIDS sensor name
-- `custom.str1` — attack phase (test_rat only: initial_access, c2_establishment, etc.)
-- `metadata.pii_type` — type of PII targeted (test_rat only)
+- `custom.str1` — attack phase (test_rat and rat_scored: initial_access, c2_establishment, etc.)
+- `metadata.pii_type` — type of PII targeted (test_rat and rat_scored)
+- `metadata.correlation_id` — 4-hour window grouping key (rat_scored only)
 
-### risk_score runtime field
+### risk_score runtime field (forensics and test_rat)
 
-Both indexes have a `risk_score` Painless runtime field (0–100) computed at query time from severity, norm_risk_level, former_category, flowbits, and destination port. No reindex needed when the script changes — update via `PUT /<index>/_mapping`.
+`forensics` and `test_rat` have a `risk_score` Painless runtime field (0–100) computed at query time from severity, norm_risk_level, former_category, flowbits, and destination port. No reindex needed when the script changes — update via `PUT /<index>/_mapping`.
 
 **Critical field name difference between indexes:**
 - `forensics`: `metadata.former_category` is `text+keyword`, so Painless must use `doc['metadata.former_category.keyword']`
 - `test_rat`: `metadata.former_category` is mapped as native `keyword`, so Painless uses `doc['metadata.former_category']` (no `.keyword`)
+
+### rat_scored ingest pipeline
+
+`rat_scored` uses `rat-scoring-pipeline` (an ES ingest pipeline) instead of a runtime field. Scores are written to stored `score.*` integer fields at bulk-ingest time. Pipeline processors in order:
+
+| Processor | Type | Input → Output |
+|---|---|---|
+| Asset lookup | Enrich (`asset-criticality-policy`) | `source.ip` → `score.asset_criticality` (0–50) |
+| Base alert severity | Painless script | `norm_risk_level` + `former_category` + `flowbits` → `score.base_alert_severity` (0–60) |
+| PII exposure tier | Painless script | `metadata.pii_type` → 4-tier taxonomy → `score.pii_exposure_tier` (0–50) |
+| Attack complexity | Painless script | `custom.str1` phase proxy → `score.attack_complexity` (10–40) |
+| Composite | Painless script | Sum of all four → `score.composite` (10–200) |
+
+The enrich policy (`asset-criticality-policy`) reads from the `asset_inventory` index (seeded by `asset_inventory.ndjson`). Both the policy and index are created by `setup.sh` before the bulk ingest. The pipeline must be passed explicitly: `POST /rat_scored/_bulk?pipeline=rat-scoring-pipeline`.
 
 ## Kibana API Notes
 

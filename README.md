@@ -50,15 +50,17 @@ Each script creates the index, inserts events, creates a Kibana data view, and i
 
 `forensics` and `test_rat` include a `risk_score` runtime field (0–100) computed from severity, risk level, threat category, flowbits, and destination port.
 
-`rat_scored` uses a four-component additive scoring model stored on each event:
+`rat_scored` uses a four-component additive scoring model. Scores are **computed at index time** by the `rat-scoring-pipeline` ES ingest pipeline — they are not hardcoded in the event data.
 
-| Field | Range | Description |
-|-------|-------|-------------|
-| `score.base_alert_severity` | 0–60 | SIEM signature confidence |
-| `score.asset_criticality` | 0–50 | Operational importance / PCI classification of target |
-| `score.pii_exposure_tier` | 0–50 | 4-tier PII taxonomy (Tier 4 low → Tier 1 critical) |
-| `score.attack_complexity` | 10–40 | Distinct MITRE ATT&CK tactic/technique pairs in 4-hour window |
-| `score.composite` | 10–200 | Additive sum of all four components |
+| Field | Range | Computed from |
+|-------|-------|---------------|
+| `score.base_alert_severity` | 0–60 | `norm_risk_level` + `former_category` + `flowbits` (Painless) |
+| `score.asset_criticality` | 0–50 | `source.ip` → `asset_inventory` enrich lookup |
+| `score.pii_exposure_tier` | 0–50 | `metadata.pii_type` → 4-tier taxonomy (Painless) |
+| `score.attack_complexity` | 10–40 | `custom.str1` attack phase → MITRE tactic breadth proxy (Painless) |
+| `score.composite` | 10–200 | Additive sum of all four (Painless) |
+
+Asset criticality is sourced from the `asset_inventory` index (7 internal hosts, IP → criticality score), consumed via the `asset-criticality-policy` enrich policy. Both are created by `setup.sh`.
 
 The dashboard shows five arc gauges on a unified 0–200 scale. The top gauge displays the composite score; the bottom row shows cumulative step-up gauges (base → +asset → +PII → +complexity). Color bands: green 0–80 · yellow 80–140 · red 140–200. Goal line at 160.
 
