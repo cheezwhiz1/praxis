@@ -8,8 +8,8 @@ Elasticsearch / Kibana / Logstash 9.3.0 running as Docker Swarm services.
 
 | Service | URL |
 |---------|-----|
-| Kibana | https://192.168.86.45:5601 |
-| Elasticsearch | https://192.168.86.45:9200 |
+| Kibana | https://192.168.86.39:5601 |
+| Elasticsearch | https://192.168.86.39:9200 |
 
 ## Setup
 
@@ -54,15 +54,18 @@ Each script creates the index, inserts events, creates a Kibana data view, and i
 
 | Field | Range | Computed from |
 |-------|-------|---------------|
-| `score.base_alert_severity` | 0–60 | `norm_risk_level` + `former_category` + `flowbits` (Painless) |
-| `score.asset_criticality` | 0–50 | `source.ip` → `asset_inventory` enrich lookup |
-| `score.pii_exposure_tier` | 0–50 | `metadata.pii_type` → 4-tier taxonomy (Painless) |
-| `score.attack_complexity` | 10–40 | `custom.str1` attack phase → MITRE tactic breadth proxy (Painless) |
-| `score.composite` | 10–200 | Additive sum of all four (Painless) |
+| `score.base_alert_severity` | 0–45 | `norm_risk_level` + `former_category` + `flowbits` (Painless) |
+| `score.asset_criticality` | 0–25 | `max(source.ip, destination.ip)` → `asset_inventory` enrich lookup |
+| `score.asset_type` | keyword | Asset type of the higher-criticality endpoint (source or destination) |
+| `score.pii_exposure_tier` | 2–20 | Explicit `metadata.pii_type` taxonomy, or inferred from `score.asset_type` |
+| `score.attack_complexity` | 4–10 | Attack phase + technique category bonus (EXPLOIT/EXFIL +3, TROJAN/MALWARE +2, SCAN +1) |
+| `score.composite` | 8–100 | Additive sum of all four (Painless) |
 
-Asset criticality is sourced from the `asset_inventory` index (7 internal hosts, IP → criticality score), consumed via the `asset-criticality-policy` enrich policy. Both are created by `setup.sh`.
+Asset criticality is sourced from the `asset_inventory` index (7 internal hosts, IP → criticality score), consumed via the `asset-criticality-policy` enrich policy. Both the source and destination IP are looked up; the higher-criticality endpoint wins. This ensures that events _targeting_ a high-value server (e.g., recon probing the payment server) score as highly as events _originating_ from one.
 
-The dashboard shows five arc gauges on a unified 0–200 scale. The top gauge displays the composite score; the bottom row shows cumulative step-up gauges (base → +asset → +PII → +complexity). Color bands: green 0–80 · yellow 80–140 · red 140–200. Goal line at 160.
+PII tier is inferred from the matched asset type when no explicit `pii_type` tag is present: payment_server→18, database_server→12, domain_controller→10, finance_workstation→8, exec_workstation→4.
+
+The dashboard shows five arc gauges on a unified 0–100 scale. The top gauge displays the average composite score across all matching events; the bottom row shows cumulative step-up gauges (① base → ② +asset → ③ +PII → ④ +complexity). Four legend tables below the step-up gauges show the specific criteria that matched each component. Color bands: green 0–40 · yellow 40–70 · red 70–100.
 
 ## Logstash Pipelines
 

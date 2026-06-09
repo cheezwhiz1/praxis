@@ -3,18 +3,18 @@
 # Safe to re-run: all resources are dropped and recreated.
 #
 # Scoring pipeline (rat-scoring-pipeline) computes four components at index time:
-#   score.base_alert_severity — Painless: former_category + flowbits + norm_risk_level (0-60)
-#   score.asset_criticality   — Enrich:   source.ip lookup in asset_inventory index (0-50)
-#   score.pii_exposure_tier   — Painless: metadata.pii_type mapped to 4-tier taxonomy (0-50)
-#   score.attack_complexity   — Painless: attack phase proxy for MITRE tactic breadth (10-40)
-#   score.composite           — Painless: additive sum of all four (10-200)
+#   score.base_alert_severity — Painless: former_category + flowbits + norm_risk_level (0-45)
+#   score.asset_criticality   — Enrich:   max(source.ip, destination.ip) lookup in asset_inventory (0-25)
+#   score.pii_exposure_tier   — Painless: pii_type taxonomy + asset_type inference (2-20)
+#   score.attack_complexity   — Painless: attack phase + technique category bonus (4-10)
+#   score.composite           — Painless: additive sum of all four components (8-100)
 set -euo pipefail
 
-ES_URL="${ES_URL:-https://192.168.86.45:9200}"
+ES_URL="${ES_URL:-https://192.168.86.39:9200}"
 ES_USER="${ES_USER:-elastic}"
 ES_PASS="${ES_PASS:-}"
 [[ -z "$ES_PASS" ]] && { printf 'Set ES_PASS env var before running.\n' >&2; exit 1; }
-KB_URL="${KB_URL:-https://192.168.86.45:5601}"
+KB_URL="${KB_URL:-https://192.168.86.39:5601}"
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 ok()  { printf '\033[32m✓\033[0m %s\n' "$*"; }
@@ -59,6 +59,9 @@ ${CURL} -XPUT "${ES_URL}/_enrich/policy/asset-criticality-policy" \
 }' | python3 -c "import sys,json; d=json.load(sys.stdin); print('acknowledged' if d.get('acknowledged') else d)" \
   && ok "Enrich policy created" || err "Failed to create enrich policy"
 
+printf 'Refreshing asset_inventory before enrich execute...\n'
+${CURL} -XPOST "${ES_URL}/asset_inventory/_refresh" > /dev/null
+
 printf 'Executing enrich policy (builds lookup index)...\n'
 ${CURL} -XPOST "${ES_URL}/_enrich/policy/asset-criticality-policy/_execute" \
   | python3 -c "import sys,json; d=json.load(sys.stdin); print('completed' if d.get('status',{}).get('phase') == 'COMPLETE' else d)" \
@@ -71,14 +74,30 @@ pipeline_json=$(python3 - <<'PYEOF'
 import json
 
 S_ASSET = (
-    "int crit = 0;"
-    " if (ctx.containsKey('_asset') && ctx['_asset'] != null"
-    "     && ctx['_asset'].containsKey('asset_criticality')) {"
-    "   crit = (int) ctx['_asset']['asset_criticality'];"
+    "int crit = 0; String atype = 'unknown';"
+    " if (ctx.containsKey('_asset') && ctx['_asset'] != null) {"
+    "   if (ctx['_asset'].containsKey('asset_criticality')) {"
+    "     crit = (int) ctx['_asset']['asset_criticality'];"
+    "   }"
+    "   if (ctx['_asset'].containsKey('asset_type')) {"
+    "     atype = ctx['_asset']['asset_type'];"
+    "   }"
+    " }"
+    " if (ctx.containsKey('_dst_asset') && ctx['_dst_asset'] != null) {"
+    "   int dstCrit = ctx['_dst_asset'].containsKey('asset_criticality')"
+    "     ? (int) ctx['_dst_asset']['asset_criticality'] : 0;"
+    "   if (dstCrit > crit) {"
+    "     crit = dstCrit;"
+    "     if (ctx['_dst_asset'].containsKey('asset_type')) {"
+    "       atype = ctx['_dst_asset']['asset_type'];"
+    "     }"
+    "   }"
     " }"
     " if (!ctx.containsKey('score')) { ctx['score'] = [:]; }"
-    " ctx['score']['asset_criticality'] = crit;"
+    " ctx['score']['asset_criticality'] = (int) Math.round(crit / 2.0);"
+    " ctx['score']['asset_type'] = atype;"
     " ctx.remove('_asset');"
+    " ctx.remove('_dst_asset');"
 )
 
 S_BASE = (
@@ -112,50 +131,75 @@ S_BASE = (
     "   }"
     " }"
     " if (!ctx.containsKey('score')) { ctx['score'] = [:]; }"
-    " ctx['score']['base_alert_severity'] = (int) Math.min(score, 60);"
+    " ctx['score']['base_alert_severity'] = (int) Math.round(Math.min(score, 60) / 60.0 * 45);"
 )
 
 S_PII = (
-    "int tier = 5;"
+    "int tier = 2;"
     " if (ctx.containsKey('metadata') && ctx['metadata'].containsKey('pii_type')) {"
     "   String pt = ctx['metadata']['pii_type'];"
     "   if (pt == 'payment_card_full_track' || pt == 'credit_card'"
     "       || pt == 'banking_credentials' || pt == 'ssn_dob_full_identity'"
     "       || pt == 'account_number' || pt == 'financial_records'"
-    "       || pt == 'payment_card') { tier = 50; }"
-    "   else if (pt == 'medical_financial_records' || pt == 'mixed_pii') { tier = 35; }"
+    "       || pt == 'payment_card') { tier = 20; }"
+    "   else if (pt == 'medical_financial_records' || pt == 'mixed_pii') { tier = 14; }"
+    " }"
+    " if (tier == 2 && ctx.containsKey('score') && ctx['score'].containsKey('asset_type')) {"
+    "   String at = ctx['score']['asset_type'];"
+    "   if (at == 'payment_server')     tier = 18;"
+    "   else if (at == 'database_server')    tier = 12;"
+    "   else if (at == 'domain_controller')  tier = 10;"
+    "   else if (at == 'finance_workstation') tier = 8;"
+    "   else if (at == 'exec_workstation')   tier = 4;"
     " }"
     " if (!ctx.containsKey('score')) { ctx['score'] = [:]; }"
     " ctx['score']['pii_exposure_tier'] = tier;"
 )
 
 S_CMPLX = (
-    "int cmplx = 10;"
+    "int phase_cmplx = 3;"
     " if (ctx.containsKey('custom') && ctx['custom'].containsKey('str1')) {"
     "   String phase = ctx['custom']['str1'];"
-    "   if (phase == 'initial_access') cmplx = 10;"
-    "   else if (phase == 'c2_establishment') cmplx = 15;"
-    "   else if (phase == 'reconnaissance') cmplx = 22;"
-    "   else if (phase == 'lateral_movement') cmplx = 28;"
-    "   else if (phase == 'privilege_escalation') cmplx = 35;"
-    "   else if (phase == 'data_discovery') cmplx = 37;"
-    "   else if (phase == 'exfiltration') cmplx = 40;"
+    "   if (phase == 'initial_access')        phase_cmplx = 2;"
+    "   else if (phase == 'c2_establishment') phase_cmplx = 3;"
+    "   else if (phase == 'reconnaissance')   phase_cmplx = 5;"
+    "   else if (phase == 'lateral_movement') phase_cmplx = 5;"
+    "   else if (phase == 'privilege_escalation') phase_cmplx = 6;"
+    "   else if (phase == 'data_discovery')   phase_cmplx = 7;"
+    "   else if (phase == 'exfiltration')     phase_cmplx = 7;"
+    " }"
+    " int cat_bonus = 0;"
+    " if (ctx.containsKey('metadata') && ctx['metadata'].containsKey('former_category')) {"
+    "   String cat = ctx['metadata']['former_category'];"
+    "   if (cat == 'EXPLOIT') cat_bonus = 3;"
+    "   else if (cat == 'EXFIL') cat_bonus = 3;"
+    "   else if (cat == 'TROJAN') cat_bonus = 2;"
+    "   else if (cat == 'MALWARE') cat_bonus = 2;"
+    "   else if (cat == 'SCAN') cat_bonus = 1;"
     " }"
     " if (!ctx.containsKey('score')) { ctx['score'] = [:]; }"
-    " ctx['score']['attack_complexity'] = cmplx;"
+    " ctx['score']['attack_complexity'] = phase_cmplx + cat_bonus;"
 )
 
 S_COMP = (
     "int base  = ctx['score'].containsKey('base_alert_severity') ? (int)ctx['score']['base_alert_severity'] : 0;"
     " int asset = ctx['score'].containsKey('asset_criticality')   ? (int)ctx['score']['asset_criticality']   : 0;"
     " int pii   = ctx['score'].containsKey('pii_exposure_tier')   ? (int)ctx['score']['pii_exposure_tier']   : 0;"
-    " int cmplx = ctx['score'].containsKey('attack_complexity')   ? (int)ctx['score']['attack_complexity']   : 10;"
+    " int cmplx = ctx['score'].containsKey('attack_complexity')   ? (int)ctx['score']['attack_complexity']   : 3;"
     " ctx['score']['composite'] = base + asset + pii + cmplx;"
 )
 
 pipeline = {
     "description": "Computes composite risk score components from event fields at index time",
     "processors": [
+        {"enrich": {
+            "description": "Asset criticality: look up destination.ip in asset_inventory",
+            "policy_name": "asset-criticality-policy",
+            "field": "destination.ip",
+            "target_field": "_dst_asset",
+            "ignore_missing": True,
+            "ignore_failure": True
+        }},
         {"enrich": {
             "description": "Asset criticality: look up source.ip in asset_inventory",
             "policy_name": "asset-criticality-policy",
@@ -166,13 +210,13 @@ pipeline = {
         }},
         {"script": {"description": "Move enriched asset_criticality into score object",
                     "lang": "painless", "source": S_ASSET}},
-        {"script": {"description": "Base alert severity (0-60): category + flowbits + risk level",
+        {"script": {"description": "Base alert severity (0-45): category + flowbits + risk level",
                     "lang": "painless", "source": S_BASE}},
-        {"script": {"description": "PII exposure tier (0-50): 4-tier taxonomy from pii_type",
+        {"script": {"description": "PII exposure tier (2-20): 4-tier taxonomy from pii_type",
                     "lang": "painless", "source": S_PII}},
-        {"script": {"description": "Attack complexity (10-40): MITRE tactic breadth from attack phase",
+        {"script": {"description": "Attack complexity (3-10): MITRE tactic breadth from attack phase",
                     "lang": "painless", "source": S_CMPLX}},
-        {"script": {"description": "Composite: additive sum of all four components",
+        {"script": {"description": "Composite: additive sum of all four components (8-100)",
                     "lang": "painless", "source": S_COMP}},
     ]
 }
@@ -206,6 +250,7 @@ ${CURL} -XPUT "${ES_URL}/rat_scored" \
         "properties": {
           "base_alert_severity": {"type": "integer"},
           "asset_criticality":   {"type": "integer"},
+          "asset_type":          {"type": "keyword"},
           "pii_exposure_tier":   {"type": "integer"},
           "attack_complexity":   {"type": "integer"},
           "composite":           {"type": "integer"}
@@ -253,6 +298,12 @@ ${CURL} -XPOST "${KB_URL}/api/data_views/data_view" \
   }
 }' | python3 -c "import sys,json; d=json.load(sys.stdin); print('ok' if 'data_view' in d else d)" \
   && ok "Data view created" || err "Failed to create data view"
+
+printf 'Refreshing data view field list...\n'
+${CURL} -XPOST "${KB_URL}/api/data_views/data_view/rat-scored-dataview/fields/refresh" \
+  -H 'kbn-xsrf: true' -H 'Content-Type: application/json' -d '{"fieldAttrs": {}}' \
+  | python3 -c "import sys,json; d=json.load(sys.stdin); print('ok' if 'fields' in d else d)" \
+  && ok "Data view fields refreshed" || err "Failed to refresh data view fields"
 
 # ── 8. Import Kibana dashboard ────────────────────────────────────────────────
 printf 'Importing dashboard...\n'

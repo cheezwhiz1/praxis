@@ -6,8 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Elasticsearch 9.3.0 / Kibana 9.3.0 / Logstash 9.3.0 running as Docker Swarm services on a single node. All three are deployed via `elastic.sh`, which generates SSL certs, writes compose files to `~/elastic/`, and brings up the stack. The cluster is single-node so `forensics` and `test_rat` indexes will always be yellow (replica shard unassigned — expected).
 
-- Elasticsearch: `https://192.168.86.45:9200`
-- Kibana: `https://192.168.86.45:5601`
+- Elasticsearch: `https://192.168.86.39:9200`
+- Kibana: `https://192.168.86.39:5601`
 - Default user: `elastic` — password in `.env` as `ES_PASS`
 
 ## Credentials
@@ -28,7 +28,7 @@ Three indexes live in `indexes/`:
 |-------|--------|---------|
 | `forensics` | 5 | Real Suricata IDS alerts (ECS format via Logstash) |
 | `test_rat` | 36 | Synthetic financial RAT simulation, 6 attack phases |
-| `rat_scored` | 31 | MediBank RAT campaign with additive composite risk scoring (0–200), 7 attack phases |
+| `rat_scored` | 31 | MediBank RAT campaign with additive composite risk scoring (0–100), 7 attack phases |
 
 Each index directory contains:
 - `events.ndjson` — Elasticsearch `_bulk` format, ready to POST directly
@@ -99,11 +99,19 @@ All indexes use [ECS](https://www.elastic.co/guide/en/ecs/current/index.html) fi
 
 | Processor | Type | Input → Output |
 |---|---|---|
-| Asset lookup | Enrich (`asset-criticality-policy`) | `source.ip` → `score.asset_criticality` (0–50) |
-| Base alert severity | Painless script | `norm_risk_level` + `former_category` + `flowbits` → `score.base_alert_severity` (0–60) |
-| PII exposure tier | Painless script | `metadata.pii_type` → 4-tier taxonomy → `score.pii_exposure_tier` (0–50) |
-| Attack complexity | Painless script | `custom.str1` phase proxy → `score.attack_complexity` (10–40) |
-| Composite | Painless script | Sum of all four → `score.composite` (10–200) |
+| Asset lookup (dst) | Enrich (`asset-criticality-policy`) | `destination.ip` → `_dst_asset` temp field |
+| Asset lookup (src) | Enrich (`asset-criticality-policy`) | `source.ip` → `_asset` temp field |
+| Asset score | Painless script | `max(src, dst)` criticality → `score.asset_criticality` (0–25), `score.asset_type` |
+| Base alert severity | Painless script | `norm_risk_level` + `former_category` + `flowbits` → `score.base_alert_severity` (0–45) |
+| PII exposure tier | Painless script | `metadata.pii_type` taxonomy + `score.asset_type` inference → `score.pii_exposure_tier` (2–20) |
+| Attack complexity | Painless script | `custom.str1` phase + `former_category` technique bonus → `score.attack_complexity` (4–10) |
+| Composite | Painless script | Additive sum of all four → `score.composite` (8–100) |
+
+**Asset scoring** uses the higher-criticality endpoint (source or destination) so that events targeting a high-value server (e.g., recon probing the payment server) reflect the target's risk, not just the attacker's compromised host.
+
+**PII inference**: when `metadata.pii_type` is absent, the tier is inferred from `score.asset_type` — payment_server→18, database_server→12, domain_controller→10, finance_workstation→8, exec_workstation→4. Explicit `pii_type` always takes precedence (max 20).
+
+**Color bands** (all five gauges): Green 0–40 · Yellow 40–70 · Red 70–100.
 
 The enrich policy (`asset-criticality-policy`) reads from the `asset_inventory` index (seeded by `asset_inventory.ndjson`). Both the policy and index are created by `setup.sh` before the bulk ingest. The pipeline must be passed explicitly: `POST /rat_scored/_bulk?pipeline=rat-scoring-pipeline`.
 
@@ -114,7 +122,7 @@ All Kibana API calls require the `kbn-xsrf: true` header.
 ### Importing saved objects
 
 ```bash
-curl -sk -u elastic:$ES_PASS -XPOST "https://192.168.86.45:5601/api/saved_objects/_import?overwrite=true" \
+curl -sk -u elastic:$ES_PASS -XPOST "https://192.168.86.39:5601/api/saved_objects/_import?overwrite=true" \
   -H "kbn-xsrf: true" \
   -F "file=@dashboard.ndjson;type=application/ndjson"
 ```
