@@ -5,7 +5,7 @@
 # Scoring pipeline (rat-scoring-pipeline) computes four components at index time:
 #   score.base_alert_severity — Painless: former_category + flowbits + norm_risk_level (0-45)
 #   score.asset_criticality   — Enrich:   max(source.ip, destination.ip) lookup in asset_inventory (0-25)
-#   score.pii_exposure_tier   — Painless: pii_type taxonomy + asset_type inference (2-20)
+#   score.pii_exposure_tier   — Painless: type_tier (explicit/inferred, 0-15) + volume_bonus (0-5) (2-20)
 #   score.attack_complexity   — Painless: attack phase + technique category bonus (4-10)
 #   score.composite           — Painless: additive sum of all four components (8-100)
 set -euo pipefail
@@ -135,25 +135,38 @@ S_BASE = (
 )
 
 S_PII = (
-    "int tier = 2;"
+    "int type_tier = 0; String pii_label = 'none';"
     " if (ctx.containsKey('metadata') && ctx['metadata'].containsKey('pii_type')) {"
     "   String pt = ctx['metadata']['pii_type'];"
     "   if (pt == 'payment_card_full_track' || pt == 'credit_card'"
     "       || pt == 'banking_credentials' || pt == 'ssn_dob_full_identity'"
     "       || pt == 'account_number' || pt == 'financial_records'"
-    "       || pt == 'payment_card') { tier = 20; }"
-    "   else if (pt == 'medical_financial_records' || pt == 'mixed_pii') { tier = 14; }"
+    "       || pt == 'payment_card') { type_tier = 15; pii_label = pt; }"
+    "   else if (pt == 'medical_financial_records' || pt == 'mixed_pii') { type_tier = 10; pii_label = pt; }"
     " }"
-    " if (tier == 2 && ctx.containsKey('score') && ctx['score'].containsKey('asset_type')) {"
+    " if (type_tier == 0 && ctx.containsKey('score') && ctx['score'].containsKey('asset_type')) {"
     "   String at = ctx['score']['asset_type'];"
-    "   if (at == 'payment_server')     tier = 18;"
-    "   else if (at == 'database_server')    tier = 12;"
-    "   else if (at == 'domain_controller')  tier = 10;"
-    "   else if (at == 'finance_workstation') tier = 8;"
-    "   else if (at == 'exec_workstation')   tier = 4;"
+    "   if (at == 'payment_server')          { type_tier = 12; pii_label = 'inferred: ' + at; }"
+    "   else if (at == 'database_server')    { type_tier = 9;  pii_label = 'inferred: ' + at; }"
+    "   else if (at == 'domain_controller')  { type_tier = 8;  pii_label = 'inferred: ' + at; }"
+    "   else if (at == 'finance_workstation'){ type_tier = 6;  pii_label = 'inferred: ' + at; }"
+    "   else if (at == 'exec_workstation')   { type_tier = 4;  pii_label = 'inferred: ' + at; }"
     " }"
+    " int vol_bonus = 0;"
+    " if (type_tier > 0) {"
+    "   long src_b = ctx.containsKey('source') && ctx['source'].containsKey('bytes') ? (long)ctx['source']['bytes'] : 0L;"
+    "   long dst_b = ctx.containsKey('destination') && ctx['destination'].containsKey('bytes') ? (long)ctx['destination']['bytes'] : 0L;"
+    "   long max_b = src_b > dst_b ? src_b : dst_b;"
+    "   if (max_b >= 104857600L) vol_bonus = 5;"
+    "   else if (max_b >= 10485760L) vol_bonus = 4;"
+    "   else if (max_b >= 1048576L) vol_bonus = 3;"
+    "   else if (max_b >= 102400L) vol_bonus = 2;"
+    "   else if (max_b >= 1024L) vol_bonus = 1;"
+    " }"
+    " int tier = (int) Math.min(20, Math.max(2, type_tier + vol_bonus));"
     " if (!ctx.containsKey('score')) { ctx['score'] = [:]; }"
     " ctx['score']['pii_exposure_tier'] = tier;"
+    " ctx['score']['pii_label'] = pii_label;"
 )
 
 S_CMPLX = (
@@ -212,7 +225,7 @@ pipeline = {
                     "lang": "painless", "source": S_ASSET}},
         {"script": {"description": "Base alert severity (0-45): category + flowbits + risk level",
                     "lang": "painless", "source": S_BASE}},
-        {"script": {"description": "PII exposure tier (2-20): 4-tier taxonomy from pii_type",
+        {"script": {"description": "PII exposure tier (2-20): type_tier (0-15) + volume_bonus (0-5, from max bytes)",
                     "lang": "painless", "source": S_PII}},
         {"script": {"description": "Attack complexity (3-10): MITRE tactic breadth from attack phase",
                     "lang": "painless", "source": S_CMPLX}},
@@ -251,6 +264,7 @@ ${CURL} -XPUT "${ES_URL}/rat_scored" \
           "base_alert_severity": {"type": "integer"},
           "asset_criticality":   {"type": "integer"},
           "asset_type":          {"type": "keyword"},
+          "pii_label":           {"type": "keyword"},
           "pii_exposure_tier":   {"type": "integer"},
           "attack_complexity":   {"type": "integer"},
           "composite":           {"type": "integer"}

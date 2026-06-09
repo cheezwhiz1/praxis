@@ -103,15 +103,15 @@ All indexes use [ECS](https://www.elastic.co/guide/en/ecs/current/index.html) fi
 | Asset lookup (src) | Enrich (`asset-criticality-policy`) | `source.ip` → `_asset` temp field |
 | Asset score | Painless script | `max(src, dst)` criticality → `score.asset_criticality` (0–25), `score.asset_type` |
 | Base alert severity | Painless script | `norm_risk_level` + `former_category` + `flowbits` → `score.base_alert_severity` (0–45) |
-| PII exposure tier | Painless script | `metadata.pii_type` taxonomy + `score.asset_type` inference → `score.pii_exposure_tier` (2–20) |
+| PII exposure tier | Painless script | `type_tier (0–15) + volume_bonus (0–5)` → `score.pii_exposure_tier` (2–20), `score.pii_label` |
 | Attack complexity | Painless script | `custom.str1` phase + `former_category` technique bonus → `score.attack_complexity` (4–10) |
 | Composite | Painless script | Additive sum of all four → `score.composite` (8–100) |
 
 **Asset scoring** uses the higher-criticality endpoint (source or destination) so that events targeting a high-value server (e.g., recon probing the payment server) reflect the target's risk, not just the attacker's compromised host.
 
-**PII inference**: when `metadata.pii_type` is absent, the tier is inferred from `score.asset_type` — payment_server→18, database_server→12, domain_controller→10, finance_workstation→8, exec_workstation→4. Explicit `pii_type` always takes precedence (max 20).
+**PII scoring** uses an additive model: `type_tier (0–15) + volume_bonus (0–5, capped at 20)`. Type tiers: explicit financial PII→15, medical/mixed→10; inferred from asset_type: payment_server→12, database_server→9, domain_controller→8, finance_workstation→6, exec_workstation→4, none→0 (floor at 2). Volume bonus is derived from `max(source.bytes, destination.bytes)`: ≥100MB→5, ≥10MB→4, ≥1MB→3, ≥100KB→2, ≥1KB→1. Volume bonus only applies when type_tier>0. This means a 256-byte recon probe to the payment server scores 12 while a 100MB payment_card_full_track exfil scores 20 — volume of data movement directly influences severity.
 
-**Color bands** (all five gauges): Green 0–40 · Yellow 40–70 · Red 70–100.
+**Color bands** (all five gauges): Green 0–40 · Yellow 40–68 · Red 68–100.
 
 The enrich policy (`asset-criticality-policy`) reads from the `asset_inventory` index (seeded by `asset_inventory.ndjson`). Both the policy and index are created by `setup.sh` before the bulk ingest. The pipeline must be passed explicitly: `POST /rat_scored/_bulk?pipeline=rat-scoring-pipeline`.
 

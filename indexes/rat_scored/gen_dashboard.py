@@ -23,8 +23,8 @@ plus four legend tables below the component gauges showing what matched each sco
 
 Color banding (all gauges, number-based on the 0–100 scale):
   Green  :   0 –  40  (low risk)
-  Yellow :  40 –  70  (elevated risk)
-  Red    :  70 – 100  (critical risk)
+  Yellow :  40 –  68  (elevated risk)
+  Red    :  68 – 100  (critical risk)
 """
 import json
 
@@ -83,7 +83,7 @@ def static_val(val, label):
 
 
 def color_palette():
-    """Green 0-40 / Yellow 40-70 / Red 70-100 on the 0–100 scale."""
+    """Green 0-40 / Yellow 40-68 / Red 68-100 on the 0–100 scale."""
     return {
         "name": "custom",
         "type": "palette",
@@ -93,11 +93,11 @@ def color_palette():
             "colorStops": [
                 {"color": "#54B399", "stop": 0},
                 {"color": "#D6BF57", "stop": 40},
-                {"color": "#E7664C", "stop": 70}
+                {"color": "#E7664C", "stop": 68}
             ],
             "stops": [
                 {"color": "#54B399", "stop": 40},
-                {"color": "#D6BF57", "stop": 70},
+                {"color": "#D6BF57", "stop": 68},
                 {"color": "#E7664C", "stop": 100}
             ],
             "continuity": "all",
@@ -240,11 +240,12 @@ objects.append(legend_table(
     "rsc-legend-asset",
     "② Asset Inventory Match  (src or dst, higher criticality)",
     {
-        "c1": terms_agg("source.ip",          "Source IP",        order_col="c3"),
-        "c2": terms_agg("score.asset_type",   "Asset Type"),
-        "c3": max_agg("score.asset_criticality", "Criticality Score"),
+        "c1": terms_agg("source.ip",             "Source IP",        order_col="c4"),
+        "c2": terms_agg("destination.ip",        "Destination IP"),
+        "c3": terms_agg("score.asset_type",      "Asset Type"),
+        "c4": max_agg("score.asset_criticality", "Criticality Score"),
     },
-    ["c1", "c2", "c3"]
+    ["c1", "c2", "c3", "c4"]
 ))
 
 # ── Legend C: PII exposure detail (under gauge ③) ────────────────────────────
@@ -252,10 +253,11 @@ objects.append(legend_table(
     "rsc-legend-pii",
     "③ PII Exposure Detail",
     {
-        "c1": terms_agg("metadata.pii_type", "PII Type", order_col="c2"),
-        "c2": count_agg("Events"),
+        "c1": terms_agg("score.pii_label", "PII Type / Inference", order_col="c3"),
+        "c2": max_agg("score.pii_exposure_tier", "Tier"),
+        "c3": count_agg("Events"),
     },
-    ["c1", "c2"]
+    ["c1", "c2", "c3"]
 ))
 
 # ── Legend D: Attack phase + technique (under gauge ④) ───────────────────────
@@ -312,7 +314,7 @@ objects.append({
             "① Base Alert Severity → ② +Asset Criticality → "
             "③ +PII Exposure Tier → ④ +Attack Complexity (= composite). "
             "Legend tables show the specific criteria that matched each component. "
-            "Color bands: Green 0–40 · Yellow 40–70 · Red 70–100."
+            "Color bands: Green 0–40 · Yellow 40–68 · Red 68–100."
         ),
         "panelsJSON": json.dumps(panels_json),
         "optionsJSON": json.dumps({
