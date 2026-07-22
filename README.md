@@ -1,73 +1,127 @@
 # praxis
 
-ELK stack deployment and forensics index tooling for Suricata IDS analysis and threat simulation.
+ELK deployment and validation harness for the **PII Context Framework** — a
+context-aware SOC triage model evaluated against five PII-targeting attack
+scenarios (Praxis Draft v6). The core artifact is a controlled, two-condition
+experiment (baseline vs enriched) whose output is a statistical report validating
+research hypotheses **H1–H3**.
 
 ## Stack
 
-Elasticsearch / Kibana / Logstash 9.3.0 running as Docker Swarm services.
+Elasticsearch / Kibana / Logstash 9.3.0 as Docker Swarm services on a single node.
 
 | Service | URL |
 |---------|-----|
-| Kibana | https://192.168.86.39:5601 |
-| Elasticsearch | https://192.168.86.39:9200 |
+| Kibana | https://192.168.86.55:5601 |
+| Elasticsearch | https://192.168.86.55:9200 |
+
+The cluster runs on a permanent **Basic** license (all features used here — security,
+enrich policies, ingest pipelines, Lens — are Basic-tier). If a request returns
+`current license is non-compliant`, run `POST /_license/start_basic?acknowledge=true`.
 
 ## Setup
 
-### 1. Start the stack
-
 ```bash
-./elastic.sh
-```
-
-Pulls images, generates SSL certs, writes compose files to `~/elastic/`, and brings up all three services.
-
-### 2. Configure credentials
-
-Create `.env` (not committed):
-
-```bash
-ES_PASS=your_password
-```
-
-### 3. Seed indexes
-
-```bash
+# 1. credentials (.env, not committed)
+echo 'ES_PASS=your_password' > .env
 source .env
-ES_PASS=$ES_PASS bash indexes/forensics/setup.sh
-ES_PASS=$ES_PASS bash indexes/test_rat/setup.sh
-ES_PASS=$ES_PASS bash indexes/rat_scored/setup.sh
+
+# 2. (first time only) bring the stack up
+./elastic.sh
+
+# 3. build the whole experiment: pipelines, 10 indices, data views, dashboards
+ES_PASS=$ES_PASS bash setup_scenarios.sh
+
+# 4. compute metrics + run the §3.8.4 statistics + write the report
+ES_PASS=$ES_PASS python3 indexes/report/gen_report.py
 ```
 
-Each script creates the index, inserts events, creates a Kibana data view, and imports the dashboard. Safe to re-run.
+`setup_scenarios.sh` is idempotent. It seeds `asset_inventory`, creates the enrich
+policy and both ingest pipelines, then for each scenario builds the `*_baseline`
+and `*_enriched` indices, data views, and dashboard.
 
-## Indexes
+## The experiment (dual-index control)
 
-| Index | Events | Dashboard |
-|-------|--------|-----------|
-| `forensics` | 5 Suricata IDS alerts | `/app/dashboards#/view/forensics-dashboard` |
-| `test_rat` | 36 financial RAT simulation events | `/app/dashboards#/view/rat-dashboard` |
-| `rat_scored` | 31 MediBank RAT campaign events | `/app/dashboards#/view/rat-scored-dashboard` |
+Each scenario is generated **once** and indexed **twice**. The only difference is
+which ingest pipeline runs:
 
-`forensics` and `test_rat` include a `risk_score` runtime field (0–100) computed from severity, risk level, threat category, flowbits, and destination port.
+| Condition | Index | Pipeline | Scoring |
+|---|---|---|---|
+| Baseline | `<scenario>_baseline` | `baseline-detection-pipeline` | Signature + standard threshold rules only. No PII context. → `baseline.risk_score` |
+| Enriched | `<scenario>_enriched` | `pii-context-enrich-pipeline` | Asset + PII context. → populated `pii.context.*` |
 
-`rat_scored` uses a four-component additive scoring model. Scores are **computed at index time** by the `rat-scoring-pipeline` ES ingest pipeline — they are not hardcoded in the event data.
+Every event carries a ground-truth `labels.is_malicious` flag and is mixed with
+benign business-activity noise (a documented subset trips standard rules to create
+realistic false positives). This makes true/false-positive rates measurable.
 
-| Field | Range | Computed from |
-|-------|-------|---------------|
-| `score.base_alert_severity` | 0–45 | `norm_risk_level` + `former_category` + `flowbits` (Painless) |
-| `score.asset_criticality` | 0–25 | `max(source.ip, destination.ip)` → `asset_inventory` enrich lookup |
-| `score.asset_type` | keyword | Asset type of the higher-criticality endpoint (source or destination) |
-| `score.pii_exposure_tier` | 2–20 | `type_tier (0–15) + volume_bonus (0–5)`: explicit financial PII→15, medical/mixed→10; inferred from asset_type: payment_server→12, database_server→9, domain_controller→8, finance_workstation→6, exec_workstation→4; volume bonus from `max(source.bytes, destination.bytes)` |
-| `score.pii_label` | keyword | Explicit `pii_type` value, or `inferred: <asset_type>`, or `none` |
-| `score.attack_complexity` | 4–10 | Attack phase + technique category bonus (EXPLOIT/EXFIL +3, TROJAN/MALWARE +2, SCAN +1) |
-| `score.composite` | 8–100 | Additive sum of all four (Painless) |
+### Five scenarios (§3.6)
 
-Asset criticality is sourced from the `asset_inventory` index (7 internal hosts, IP → criticality score), consumed via the `asset-criticality-policy` enrich policy. Both the source and destination IP are looked up; the higher-criticality endpoint wins. This ensures that events _targeting_ a high-value server (e.g., recon probing the payment server) score as highly as events _originating_ from one.
+| Key | Scenario | MITRE chain | PII target |
+|---|---|---|---|
+| `s1_rat` | RAT with PII exfiltration (primary/PoC) | T1566.001→T1547.001→T1083/T1005→T1074.001/T1041 | SSN + bank account |
+| `s2_ato` | Credential harvesting → online-banking ATO | T1566.002→T1539/T1185→T1078→T1041 | Banking credentials |
+| `s3_insider` | Privileged-insider (DBA) bulk export | T1078.002→T1530→T1048/T1567 | Full customer records |
+| `s4_sqli` | SQL injection → web shell → card exfil | T1190→T1505→T1074/T1041 | Cardholder data (PCI) |
+| `s5_ransomware` | RaaS double-extortion, pre-encryption exfil | T1133→T1570→T1560/T1537→T1486 | HR + customer PII |
 
-PII scoring uses an additive `type_tier + volume_bonus` model. Type tier is set from `metadata.pii_type` when present; otherwise inferred from `score.asset_type`. Volume bonus (0–5) comes from `max(source.bytes, destination.bytes)` and only applies when type_tier>0 — a 256-byte recon probe to the payment server scores 12 while a 100MB bulk exfiltration scores 20.
+### Composite scoring (enriched, v6 §3.7.4)
 
-The dashboard shows five arc gauges on a unified 0–100 scale. The top gauge displays the average composite score across all matching events; the bottom row shows cumulative step-up gauges (① base → ② +asset → ③ +PII → ④ +complexity). Four legend tables below the step-up gauges show the specific criteria that matched each component. Color bands: green 0–40 · yellow 40–68 · red 68–100.
+`pii.context.composite_risk_score` = additive sum, range **10–100**:
+
+| Component | Range | Computed from |
+|---|---|---|
+| `base_alert_severity` | 0–30 | `norm_risk_level` + `former_category` + `flowbits` |
+| `asset_criticality` | 0–25 | higher-criticality endpoint (src/dst) via `asset_inventory` enrich |
+| `pii_exposure_tier` | 0–25 | 4-tier PII taxonomy (T1 20 / T2 14 / T3 8 / T4 3) + volume bonus (0–5) |
+| `attack_complexity` | 5–20 | # distinct MITRE techniques in the correlation window |
+
+**Priority tiers:** critical ≥80 · high 60–79 · medium 40–59 · low <40.
+High-priority = critical+high (≥60). Dashboard gauge bands: green <40 · yellow
+40–60 · orange 60–80 · red 80+.
+
+The PII tier is taken from an explicit `metadata.pii_type` when present, otherwise
+**inferred** from the asset's `data_classification`. So a benign authorized bulk
+transfer to a Tier-1 database is elevated by context, while a low-signature
+malicious lateral move toward that database — invisible to signature-only
+baseline detection — is surfaced as high priority.
+
+## Validation report (§3.8.4)
+
+`indexes/report/gen_report.py` queries both index sets, computes the primary and
+secondary metrics, runs the inferential tests in pure Python (no scipy needed) —
+**paired t-test + Cohen's d** (triage time), **two-proportion z-test** (TPR@high),
+**independent t-test + Levene** (risk-score precision) — and writes:
+
+- `indexes/report/praxis_validation_report.docx` — thesis-ready
+- `indexes/report/praxis_validation_report.md` — same content, Markdown
+- `indexes/report/metrics_raw.csv` — per-scenario raw numbers
+
+It also seeds the `praxis_results` index and imports the Kibana **Validation
+Results** dashboard (the exportable/visual counterpart, since Kibana cannot run
+inferential statistics).
+
+## Layout
+
+```
+setup_scenarios.sh              orchestration (idempotent)
+indexes/lib/                    shared library
+  topology.py                     network + asset inventory + PII classification
+  mitre.py                        ATT&CK technique tables
+  events.py                       ECS event builder + benign noise + dual bulk writer
+  scoring.py                      both ingest pipelines + mappings + asset inventory (CLI)
+  lens_dsl.py                     Kibana 9.3 Lens dashboard DSL
+  stats.py                        paired/independent t, Levene, two-proportion z, Cohen's d
+indexes/<scenario>/             gen_events.py, gen_dashboard.py, events.ndjson, dashboard.ndjson
+indexes/report/                 metrics.py, gen_report.py, gen_results_dashboard.py + outputs
+indexes/forensics/              legacy: 5 real Suricata IDS alerts (runtime risk_score)
+```
+
+`test_rat` and `rat_scored` are the earlier single-index prototypes, superseded by
+the dual-index scenarios (`s1_rat` supersedes `rat_scored`). They remain on disk for
+reference but are not wired into `setup_scenarios.sh`.
 
 ## Logstash Pipelines
 
-`logstash-pipeline.tar.gz` contains the full Logstash pipeline configuration (extracts to `~/.persistent/`). Pipelines cover Suricata, Palo Alto, McAfee ePO, Windows Security Events, and Wazuh — all routing valid events to the `forensics` index.
+`logstash-pipeline.tar.gz` extracts to `~/.persistent/` and covers Suricata, Palo
+Alto, McAfee ePO, Windows Security Events, and Wazuh — all routing valid events to
+the `forensics` index.

@@ -3,11 +3,11 @@
 # Safe to re-run: existing index and saved objects are overwritten.
 set -euo pipefail
 
-ES_URL="${ES_URL:-https://192.168.86.39:9200}"
+ES_URL="${ES_URL:-https://192.168.86.55:9200}"
 ES_USER="${ES_USER:-elastic}"
 ES_PASS="${ES_PASS:-}"
 [[ -z "$ES_PASS" ]] && { printf 'Set ES_PASS env var before running.\n' >&2; exit 1; }
-KB_URL="${KB_URL:-https://192.168.86.39:5601}"
+KB_URL="${KB_URL:-https://192.168.86.55:5601}"
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 ok()  { printf '\033[32m✓\033[0m %s\n' "$*"; }

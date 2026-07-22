@@ -1,0 +1,14 @@
+scenario,title,condition,alerts_total,malicious_total,high_priority_volume,true_positives,false_positives,tpr_at_high,fpr_at_high,recall_at_high
+s1_rat,Remote Access Trojan with PII Exfiltration,baseline,145,20,47,12,35,0.255,0.745,0.600
+s1_rat,Remote Access Trojan with PII Exfiltration,enriched,145,20,11,9,2,0.818,0.182,0.450
+s2_ato,Credential Harvesting & Online-Banking Account Takeover,baseline,137,12,43,8,35,0.186,0.814,0.667
+s2_ato,Credential Harvesting & Online-Banking Account Takeover,enriched,137,12,9,7,2,0.778,0.222,0.583
+s3_insider,Privileged-Insider Bulk Data Export (DBA),baseline,144,9,40,5,35,0.125,0.875,0.556
+s3_insider,Privileged-Insider Bulk Data Export (DBA),enriched,144,9,7,5,2,0.714,0.286,0.556
+s4_sqli,SQL Injection to Cardholder-Data Exfiltration,baseline,135,10,35,6,29,0.171,0.829,0.600
+s4_sqli,SQL Injection to Cardholder-Data Exfiltration,enriched,135,10,5,3,2,0.600,0.400,0.300
+s5_ransomware,Ransomware-as-a-Service Double-Extortion,baseline,159,14,45,10,35,0.222,0.778,0.714
+s5_ransomware,Ransomware-as-a-Service Double-Extortion,enriched,159,14,12,10,2,0.833,0.167,0.714
+
+POOLED,,baseline,720,65,210,41,169,0.195,0.805,
+POOLED,,enriched,720,65,44,34,10,0.773,0.227,
