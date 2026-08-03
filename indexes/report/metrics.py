@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
 """
-Metric computation for the Praxis v7 validation report.
+Metric computation for the Praxis v8 validation report.
 
 Pulls every event from the paired *_baseline / *_enriched indices, labels each as
 TP/FP against ground truth (labels.is_malicious), and computes the primary and
 secondary metrics of §3.8.2 / §3.8.3 plus the simulated triage-time model that feeds
 the §3.8.4 tests.
 
-v7 PII-scoring revision (§3.6): the PII context is a BOUNDED, WEIGHTED promotion layer.
-The enriched base severity uses the SAME 0-100 standard-detection formula as the baseline;
-three bounded contributions (pii 0-25 + asset 0-20 + complexity 0-15) are then added to it,
-and the framework concentrates confirmed PII attacks into a dedicated CRITICAL tier that is
-GATED on Tier-1/2 PII presence. The analyst's ACTIONABLE high-priority queue is therefore
-condition-specific:
+v8 scoring model (§3.5 / §3.7.4): the PII context is a BOUNDED, WEIGHTED promotion layer
+whose four contribution maxima total exactly 100. The enriched base severity uses the SAME
+0-100 standard-detection formula as the baseline but contributes only a normalized 0-30; three
+further bounded contributions (pii 0-25 + asset 0-25 + complexity 5-20) are added to it, and
+the framework concentrates confirmed PII attacks into a dedicated CRITICAL tier that is GATED
+on composite >=80 + Tier-1/2 PII presence + active-attack evidence. The analyst's ACTIONABLE
+high-priority queue is therefore condition-specific:
   * BASELINE  -> high+critical (base score >= 60): the best prioritization a standard
                  SOC can make without data context.
   * ENRICHED  -> the promoted CRITICAL tier (pii.context.priority == 'critical'): the
@@ -42,8 +43,22 @@ def _b_hp(r):
 
 
 def _e_hp(r):
-    """Enriched actionable high-priority: the promoted CRITICAL tier (v7)."""
+    """Enriched IMMEDIATE-RESPONSE queue: the promoted CRITICAL tier (composite >=80,
+    PII-gated). This is the confirmed-PII-attack queue used for the H2 binary-escalation
+    metrics — high-priority alert volume, TPR@high, FPR@high, alert-distribution (§3.8.1)."""
     return r.get("e_prio") == "critical"
+
+
+def _e_pi(r):
+    """Enriched PRIORITY-INVESTIGATION queue: composite >= 60 (high + critical). Per §3.5,
+    a composite of 60+ is routed to the priority investigation queue (critical, 80+ gated,
+    goes further to immediate incident response). This is the queue an analyst actually
+    navigates, so it is the correct actionable set for the two NON-binary-escalation
+    hypotheses: H1 triage speed (time to reach a high-risk PII TP in the queue) and H3
+    early detection (a precursor ELEVATED to priority investigation, not necessarily to
+    critical). Using critical-only here would miss the precursor-elevation win the model
+    is designed to deliver and would penalize triage speed for de-prioritized malicious noise."""
+    return r.get("e_score", 0) >= HIGH
 
 _CTX = ssl.create_default_context()
 _CTX.check_hostname = False
@@ -131,7 +146,9 @@ def scenario_metrics(key):
     mal = [r for r in recs if r["mal"]]
     ben = [r for r in recs if not r["mal"]]
     b_pos = _queue_positions(recs, _b_hp, "b_score")
-    e_pos = _queue_positions(recs, _e_hp, "e_score")
+    # H1 triage navigates the enriched PRIORITY-INVESTIGATION queue (composite >=60), not the
+    # critical-only immediate-response queue — criticals sort to the top of it by composite.
+    e_pos = _queue_positions(recs, _e_pi, "e_score")
 
     def block(hp_fn):
         hp = [r for r in recs if hp_fn(r)]
@@ -154,7 +171,7 @@ def scenario_metrics(key):
     tt_b, tt_e = [], []
     for r in hr:
         tt_b.append(_triage_time(r, _b_hp, b_pos, C_CTX_BASELINE))
-        tt_e.append(_triage_time(r, _e_hp, e_pos, C_CTX_ENRICHED))
+        tt_e.append(_triage_time(r, _e_pi, e_pos, C_CTX_ENRICHED))
 
     # priority-tier distribution (for alert-distribution-shift) — from the priority
     # strings actually assigned by each pipeline (baseline.priority / pii.context.priority)
@@ -168,7 +185,9 @@ def scenario_metrics(key):
     pre = [r for r in mal if r["phase"] not in ("exfiltration", "impact")
            and r.get("dclass") in ("tier1", "tier2")]
     ed_b = sum(1 for r in pre if _b_hp(r))
-    ed_e = sum(1 for r in pre if _e_hp(r))
+    # H3: a precursor "detected early" is one ELEVATED to the enriched priority-investigation
+    # queue (composite >=60) ahead of the exfil phase — not necessarily promoted to critical.
+    ed_e = sum(1 for r in pre if _e_pi(r))
 
     # PII-exposure coverage: internal IPs implicated that are in the asset registry
     internal = {r["src"] for r in recs if str(r["src"]).startswith("10.")} | \

@@ -190,10 +190,10 @@ def build_scenario_dashboard(key, title, dv_enriched, dv_baseline, window):
     objects.append(xy_stacked(
         E, f"{key}-breakdown", "Escalation Contribution by Priority  (base + PII + asset + complexity = enriched risk)",
         {"x":  terms_agg(f"{P}.priority", "Priority", order_col="cord", size=4),
-         "yb": avg_agg(f"{P}.base_alert_severity", "① Base severity"),
+         "yb": avg_agg(f"{P}.contrib_base", "① Base severity (normalized, 0–30)"),
          "yp": avg_agg(f"{P}.contrib_pii", "② PII exposure (impact, 0–25)"),
-         "ya": avg_agg(f"{P}.contrib_asset", "③ Asset criticality (impact, 0–20)"),
-         "yc": avg_agg(f"{P}.contrib_complexity", "④ Attack complexity (likelihood, 0–15)"),
+         "ya": avg_agg(f"{P}.contrib_asset", "③ Asset criticality (impact, 0–25)"),
+         "yc": avg_agg(f"{P}.contrib_complexity", "④ Attack complexity (likelihood, 5–20)"),
          "cord": avg_agg(f"{P}.composite_risk_score", "order")},
         ["x", "yb", "yp", "ya", "yc", "cord"], "x", ["yb", "yp", "ya", "yc"]))
     # Row 2 — base severity + the three bounded contributions actually added to it
@@ -265,13 +265,15 @@ def build_scenario_dashboard(key, title, dv_enriched, dv_baseline, window):
         {"i": f"{key}-crit-tpfp",  "x":  0, "y": 79, "w": 48, "h": 18},
     ]
     did = f"{key}-dashboard"
-    desc = (f"{title}. v7 promotion model: base alert severity (0–100, same formula as baseline) owns the "
-            "base tier; the PII context is a bounded, weighted promotion layer that ADDS three visible "
-            "contributions — PII exposure (0–25, impact), asset criticality (0–20, impact), attack "
-            "complexity (0–15, likelihood) — so enriched risk = base + the three. Impact (≤45) outweighs "
-            "likelihood (≤15): a confirmed attack on Tier-1/2 PII is promoted to critical, a sophisticated "
-            "attack on non-PII data is capped at high; critical is gated on a confirmed PII attack (Tier-1/2 "
-            "PII target AND observed PII exposure or ≥1 correlated technique). The "
+    desc = (f"{title}. v8 promotion model: base alert severity (0–100, same formula as baseline) sets the "
+            "base tier but contributes a normalized 0–30 to the composite; the PII context is a bounded, "
+            "weighted promotion layer of four contributions whose maxima total exactly 100 — base severity "
+            "(0–30), PII exposure (0–25; T1 25/T2 18/T3 8/T4 0, impact), asset criticality (0–25, impact), "
+            "attack complexity (5–20, likelihood) — so composite = base + pii + asset + complexity. Because "
+            "base contributes ≤30, a non-PII asset maxes at 75: impact (25+25) outweighs likelihood (20), so "
+            "a confirmed attack on Tier-1/2 PII is promoted to critical while a sophisticated attack on non-PII "
+            "data is capped at high; critical is gated on composite ≥80 AND a Tier-1/2 PII target AND observed "
+            "PII exposure or ≥1 correlated technique. The "
             "‘Escalation Contribution by Priority’ chart decomposes each tier's score into these four parts "
             "— the defensible evidence for the high→critical promotion. Bands: green<40 low · yellow 40–60 "
             "medium · orange 60–80 high · red 80+ critical. Bottom rows contrast baseline vs enriched "

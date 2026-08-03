@@ -8,12 +8,12 @@ to a criticality (0-50), an asset_type, a PII data_classification tier, and the 
 categories it stores. The enriched pipeline looks up source.ip and destination.ip
 against this inventory and scores on the higher-criticality endpoint.
 
-data_classification tiers (v6 PII taxonomy):
-  tier1  Critical PII   (SSN, full PAN, bank acct+routing)      -> pii base 20
-  tier2  High PII        (name+DOB, account credentials)         -> pii base 14
-  tier3  Moderate PII    (email, phone)                          -> pii base  8
-  tier4  Low PII         (public / minimal)                      -> pii base  3
-  none   no PII association                                      -> pii base  0
+data_classification tiers (v8 PII taxonomy, §3.7.4 Table 3.2):
+  tier1  Critical PII   (SSN, full PAN, bank acct+routing)      -> pii exposure 25
+  tier2  High PII        (name+DOB, account credentials)         -> pii exposure 18
+  tier3  Moderate PII    (email, phone)                          -> pii exposure  8
+  tier4  Low PII         (public / minimal)                      -> pii exposure  0
+  none   no PII association                                      -> pii exposure  0
 """
 from datetime import datetime
 

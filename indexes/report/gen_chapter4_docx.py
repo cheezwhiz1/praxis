@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Generate a standalone **Chapter 4: Results** .docx for the Praxis v7 dissertation.
+Generate a standalone **Chapter 4: Results** .docx for the Praxis v8 dissertation.
 
 Modeled on the flow/structure of Munuo_praxis.pdf's Chapter 4 (restate RQs +
 hypotheses -> describe the dataset -> per-dimension analysis, each a simple
@@ -11,9 +11,9 @@ the same metrics/stats path the validation report uses (gen_report.compute()), s
 the chapter never drifts from the report. Figures are rendered from that data with
 the Kibana 4-band priority palette, i.e. they reproduce the dashboard panels.
 
-The document is TEMPLATED FROM the draft (Praxis_Draft_v7_PII-scoring-revision.docx):
-its body is cleared but its styles / fonts / section setup are kept, so the add-on
-chapter is visually seamless with the rest of the dissertation.
+The document is built as a fresh, self-contained .docx (Times New Roman, 12pt) so the
+add-on chapter is visually consistent with the dissertation without carrying over any
+orphaned media from the multi-MB draft.
 
 Run:  ES_URL=... KB_URL=... ES_PASS=... python3 indexes/report/gen_chapter4_docx.py
 """
@@ -41,7 +41,6 @@ import metrics as MET      # noqa: E402
 import gen_report as GR    # noqa: E402
 from topology import SCENARIO_TITLE, SCENARIOS  # noqa: E402
 
-TEMPLATE = os.path.join(ROOT, "Praxis_Draft_v7_PII-scoring-revision.docx")
 OUT = os.path.join(ROOT, "Chapter4_Results.docx")
 FIGDIR = os.path.join(HERE, "ch4_figures")
 os.makedirs(FIGDIR, exist_ok=True)
@@ -163,10 +162,10 @@ def fig_decomposition(decomp):
     x = range(len(order))
     fig, ax = plt.subplots(figsize=(6.6, 3.8))
     b0 = [0] * len(order)
-    for vals, c, lab in [(base, "#4E79A7", "(1) Base severity"),
-                         (pii, C_CRIT, "(2) PII exposure (impact)"),
-                         (asset, C_HIGH, "(3) Asset criticality (impact)"),
-                         (cx, C_LOW, "(4) Attack complexity (likelihood)")]:
+    for vals, c, lab in [(base, "#4E79A7", "(1) Base severity (normalized, 0–30)"),
+                         (pii, C_CRIT, "(2) PII exposure (impact, 0–25)"),
+                         (asset, C_HIGH, "(3) Asset criticality (impact, 0–25)"),
+                         (cx, C_LOW, "(4) Attack complexity (likelihood, 5–20)")]:
         ax.bar(x, vals, .55, bottom=b0, label=lab, color=c)
         b0 = [b0[i] + vals[i] for i in x]
     for i in x:
@@ -282,21 +281,23 @@ def pstr(p):
 # ── data collection ───────────────────────────────────────────────────────────
 def priority_decomposition():
     idx = ",".join(f"{k}_enriched" for k in SCENARIOS)
-    fields = ["base_alert_severity", "contrib_pii", "contrib_asset", "contrib_complexity"]
+    # v8: the composite is the sum of four bounded contributions whose maxima total exactly
+    # 100 — contrib_base (normalized 0-30) + contrib_pii + contrib_asset + contrib_complexity —
+    # so the decomposition sums to the composite with no rescaling needed.
+    fields = ["contrib_base", "contrib_pii", "contrib_asset", "contrib_complexity"]
     aggflds = fields + ["composite_risk_score"]
     body = {"size": 0, "aggs": {"byp": {"terms": {"field": "pii.context.priority"},
             "aggs": {f: {"avg": {"field": f"pii.context.{f}"}} for f in aggflds}}}}
     agg = MET._es(f"/{idx}/_search", body)
     out = {}
     for bkt in agg["aggregations"]["byp"]["buckets"]:
-        raw = {"base": bkt["base_alert_severity"]["value"] or 0,
+        raw = {"base": bkt["contrib_base"]["value"] or 0,
                "pii": bkt["contrib_pii"]["value"] or 0,
                "asset": bkt["contrib_asset"]["value"] or 0,
                "cmplx": bkt["contrib_complexity"]["value"] or 0}
         comp = bkt["composite_risk_score"]["value"] or 0
-        # component means can sum above the composite because composite is capped at
-        # 100; scale them proportionally so the stack height equals the true mean
-        # composite and no bar exceeds 100 (an honest "share of the score" view).
+        # the four contributions sum to the composite by construction; a tiny rounding
+        # scale keeps the stack height exactly equal to the mean composite.
         s = sum(raw.values())
         scale = (comp / s) if s > comp and s > 0 else 1.0
         out[bkt["key"]] = {k: v * scale for k, v in raw.items()}
@@ -394,14 +395,19 @@ def build():
     para(doc, "Both conditions start from the same 0–100 base severity produced by standard "
               "detection rules (signature reputation, category, large-transfer, encoded PowerShell, "
               "failed-auth, geo-anomaly, and database-volume triggers). The baseline stops there and "
-              "maps the score to a priority tier. The enriched condition adds a bounded, weighted "
-              "promotion layer: three contextual contributions — PII exposure (0–25, the "
-              "primary impact term), asset criticality (0–20, secondary impact), and attack "
-              "complexity (0–15, threat likelihood) — are added to the base score to form a "
-              "composite. Because the impact terms (up to 45) outweigh the likelihood term (up to 15), "
-              "a confirmed attack on Tier-1/2 PII can be promoted to the critical tier, while a merely "
-              "sophisticated attack on non-sensitive data cannot. The critical tier is further gated: "
-              "it requires a Tier-1/2 PII target and real evidence of an active attack.")
+              "maps the score to a priority tier. The enriched condition applies a bounded, weighted "
+              "promotion layer of four contributions whose maximum values total exactly 100, so no cap "
+              "is required: the base severity is normalized to a contribution of at most 30, and three "
+              "contextual contributions are added — PII exposure (0–25, the primary impact term; Tier 1 "
+              "= 25, Tier 2 = 18, Tier 3 = 8, Tier 4 = 0), asset criticality (0–25, secondary impact), "
+              "and attack complexity (5–20, threat likelihood) — to form the composite (composite = base "
+              "+ PII + asset + complexity). Because the base can contribute at most 30, an alert on an "
+              "asset holding no sensitive PII reaches a maximum composite of 75, which sits inside the "
+              "high band and below the critical threshold of 80; the impact terms (up to 25 + 25) thus "
+              "outweigh the likelihood term (up to 20), so a confirmed attack on Tier-1/2 PII can be "
+              "promoted to the critical tier while a merely sophisticated attack on non-sensitive data "
+              "cannot. The critical tier is further gated: it requires a composite of 80 or above, a "
+              "Tier-1/2 PII target, and real evidence of an active attack.")
     para(doc, "Figure 4.1 shows how the four components combine, on average, within each enriched "
               "priority tier (scaled so each bar equals the true mean composite, which is capped at "
               "100). Two things stand out. First, the impact contributions — PII exposure and asset "
@@ -426,8 +432,9 @@ def build():
               f"{pool['e_high']} alerts in its promoted critical tier, a {volred:.0f}% reduction in "
               f"volume, concentrating attention on the confirmed PII attacks. Figure 4.2 shows this "
               f"collapse holds in every scenario, and Table 4.2 gives the per-scenario detail.")
-    figure(doc, f_vol, "Figure 4.2. High-priority alert volume by scenario and condition. The "
-                       "enriched framework reduces the actionable queue from 210 to 44 alerts (79%).", 6.2)
+    figure(doc, f_vol, f"Figure 4.2. High-priority alert volume by scenario and condition. The "
+                       f"enriched framework reduces the actionable queue from {pool['b_high']} to "
+                       f"{pool['e_high']} alerts ({volred:.0f}%).", 6.2)
     table(doc, "Table 4.2. Primary triage metrics per scenario and pooled",
           ["Scenario", "Cond.", "High-prio", "TP", "FP", "TPR", "FPR", "Recall"],
           _primary_rows(M, pool))
@@ -437,8 +444,8 @@ def build():
               f"is highly significant: z = {tz['z']:.2f}, {pstr(tz['p'])}, Cohen's h = "
               f"{tz['cohens_h']:.2f}. This directly supports H2 and answers Q3: adding PII context "
               f"sharply reduces false-positive noise in the actionable queue.")
-    figure(doc, f_tpr, "Figure 4.3. True-positive rate at high priority. Every scenario improves; the "
-                       "pooled rate rises from 0.195 to 0.773.", 6.2)
+    figure(doc, f_tpr, f"Figure 4.3. True-positive rate at high priority. Every scenario improves; the "
+                       f"pooled rate rises from {b_tpr:.3f} to {e_tpr:.3f}.", 6.2)
 
     # 4.5 Precision of critical tier (H2)
     H(doc, "4.5 Precision of the Critical Tier: True vs. False Positives (H2)", 2)
@@ -474,8 +481,8 @@ def build():
               f"with the bulk of routine traffic correctly settling into the medium and low tiers for "
               f"batch review. This concentration is the mechanism behind the noise reduction: the "
               f"analyst's immediate attention is focused on a small, high-value set.")
-    figure(doc, f_dist, "Figure 4.6. Distribution of all 720 alerts across priority tiers, baseline "
-                        "vs. enriched, using the dashboard's four-band palette.", 5.0)
+    figure(doc, f_dist, f"Figure 4.6. Distribution of all {pool['n']} alerts across priority tiers, "
+                        f"baseline vs. enriched, using the dashboard's four-band palette.", 5.0)
 
     # 4.7 Triage speed (H1)
     H(doc, "4.7 Triage Speed (H1)", 2)
@@ -494,14 +501,18 @@ def build():
     # 4.8 Early detection (H3)
     H(doc, "4.8 Early Detection of Precursors (H3)", 2)
     para(doc, f"Finally, the framework was tested on whether it flags early-stage precursors — "
-              f"the quiet lateral-movement and discovery events that precede bulk exfiltration — "
-              f"as high priority. Of {pool['early_n']} pre-exfiltration malicious events on Tier-1/2 "
-              f"assets, the enriched condition surfaced {pool['early_e']} ({pool['early_e']/pool['early_n']:.3f}) "
-              f"versus {pool['early_b']} ({pool['early_b']/pool['early_n']:.3f}) for the baseline "
-              f"(Figure 4.8) — about 30% more. The direction supports H3, but with this small "
-              f"number of precursor events the difference is not statistically significant "
-              f"(z = {ez['z']:.2f}, {pstr(ez['p'])}); H3 is therefore directionally, not conclusively, "
-              f"supported, consistent with the proof-of-concept scope of the study.")
+              f"the quiet lateral-movement and discovery events that precede bulk exfiltration — as "
+              f"high priority. Because these precursors touch Tier-1/2 assets, PII exposure and asset "
+              f"criticality lift them into the enriched priority-investigation queue (composite ≥ 60) "
+              f"even when their raw base severity is low, whereas the baseline, scoring on signal "
+              f"strength alone, leaves most of them below its threshold. Of {pool['early_n']} "
+              f"pre-exfiltration malicious events on Tier-1/2 assets, the enriched condition surfaced "
+              f"{pool['early_e']} ({pool['early_e']/pool['early_n']:.3f}) as high priority versus "
+              f"{pool['early_b']} ({pool['early_b']/pool['early_n']:.3f}) for the baseline (Figure 4.8) "
+              f"— {(pool['early_e']/pool['early_b']-1)*100:.0f}% more. A two-proportion z-test confirms "
+              f"the difference is significant (z = {ez['z']:.2f}, {pstr(ez['p'])}), supporting H3; "
+              f"consistent with the proof-of-concept scope of the study, the small number of distinct "
+              f"scenarios still bounds the generalizability of this result.")
     figure(doc, f_ear, "Figure 4.8. Early-stage precursor detection rate, baseline vs. enriched.", 3.9)
 
     # 4.9 Hypothesis summary

@@ -64,20 +64,23 @@ realistic false positives). This makes true/false-positive rates measurable.
 | `s4_sqli` | SQL injection → web shell → card exfil | T1190→T1505→T1074/T1041 | Cardholder data (PCI) |
 | `s5_ransomware` | RaaS double-extortion, pre-encryption exfil | T1133→T1570→T1560/T1537→T1486 | HR + customer PII |
 
-### Composite scoring (enriched, v6 §3.7.4)
+### Composite scoring (enriched, v8 §3.5 / §3.7.4)
 
-`pii.context.composite_risk_score` = additive sum, range **10–100**:
+`pii.context.composite_risk_score` = sum of four bounded contributions whose maxima
+total **exactly 100** (range 5–100):
 
-| Component | Range | Computed from |
+| Contribution | Range | Computed from |
 |---|---|---|
-| `base_alert_severity` | 0–30 | `norm_risk_level` + `former_category` + `flowbits` |
-| `asset_criticality` | 0–25 | higher-criticality endpoint (src/dst) via `asset_inventory` enrich |
-| `pii_exposure_tier` | 0–25 | 4-tier PII taxonomy (T1 20 / T2 14 / T3 8 / T4 3) + volume bonus (0–5) |
-| `attack_complexity` | 5–20 | # distinct MITRE techniques in the correlation window |
+| `contrib_base` | 0–30 | `base_alert_severity` (0–100 standard-detection score) normalized: `round(30·base/100)` |
+| `contrib_pii` | 0–25 | discrete 4-tier PII taxonomy (T1 25 / T2 18 / T3 8 / T4 0) |
+| `contrib_asset` | 0–25 | higher-criticality endpoint (src/dst) via `asset_inventory` enrich |
+| `contrib_complexity` | 5–20 | # distinct MITRE techniques in the correlation window |
 
-**Priority tiers:** critical ≥80 · high 60–79 · medium 40–59 · low <40.
-High-priority = critical+high (≥60). Dashboard gauge bands: green <40 · yellow
-40–60 · orange 60–80 · red 80+.
+**Priority tiers:** critical ≥80 (gated) · high 60–79 · medium 40–59 · low <40.
+Because base contributes ≤30, an alert on a non-PII asset maxes at 75 (high) — impact
+(25+25) outweighs likelihood (20). Critical is **gated**: composite ≥80 AND Tier-1/2 PII
+AND active-attack evidence. Dashboard gauge bands: green <40 · yellow 40–60 · orange
+60–80 · red 80+.
 
 The PII tier is taken from an explicit `metadata.pii_type` when present, otherwise
 **inferred** from the asset's `data_classification`. So a benign authorized bulk

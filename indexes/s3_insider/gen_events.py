@@ -18,7 +18,13 @@ from topology import BASE, NET, EXT, SENSORS  # noqa: E402
 K = "s3_insider"
 base, net, ext = BASE[K], NET[K], EXT[K]
 S1, S2 = SENSORS[K]
-W1, W2 = "corr-s3-collect", "corr-s3-exfil"
+# One continuous insider operation by a single actor over a ~30h dwell: the
+# collection precursors and the cloud-sync exfiltration belong to the SAME
+# correlated campaign, so they share one correlation window. attack_complexity
+# then reflects the full multi-technique chain (T1078.002 -> T1530 -> T1560 ->
+# T1567/T1048), which is what separates the unauthorized bulk export from the
+# authorized 2-technique DR export benign baseline (§3.7.4 "multi-stage campaigns").
+W1 = W2 = "corr-s3-insider"
 
 
 def mal(h, src, dst, port, tname, sev, risk, cat, tech, phase, cid,

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Praxis v7 — statistical validation report generator.
+Praxis v8 — statistical validation report generator.
 
 Computes the §3.8.2/§3.8.3 metrics from the paired baseline/enriched indices,
 runs the §3.8.4 inferential tests (paired t-test + Cohen's d; two-proportion
@@ -134,19 +134,27 @@ def write_md(M, pool, tests, path):
     L.append("- **Design:** single-environment, two-condition comparison over five scenarios. "
              "Identical events indexed twice; the only difference is the populated `pii.context.*` "
              "namespace in the enriched condition (baseline uses signature + threshold rules only).")
-    L.append("- **Enriched scoring (v7 promotion model):** base alert severity is scored 0–100 by the "
-             "*same* standard-detection formula as the baseline (base tiers: high ≥60, medium 40–59, low <40). "
-             "The PII context is a **bounded, weighted promotion layer** — three visible contributions "
-             "(PII exposure 0–25 primary impact, asset criticality 0–20 secondary impact, attack complexity "
-             "0–15 threat likelihood) are **added** to the base: `composite = base + pii + asset + complexity`. "
-             "Impact (≤45) outweighs likelihood (≤15), so a confirmed attack on Tier-1/2 PII is promoted to "
-             "**critical** while a sophisticated attack on non-sensitive data is capped at high. The critical "
-             "tier is **gated on a confirmed PII attack** — Tier-1/2 PII target **and** real attack evidence "
-             "(observed PII exposure or ≥1 correlated MITRE technique), so ambient traffic on PII-holding "
-             "assets does not qualify (NIST SP 800-30r1 / 800-122 / FIPS 199).")
-    L.append("- **Actionable high-priority queue:** baseline = high+critical (base ≥60), the best a "
-             "context-blind SOC can prioritize; enriched = the promoted **critical** tier — the confirmed "
-             "PII-attack queue. Ground truth = `labels.is_malicious`.")
+    L.append("- **Enriched scoring (v8 promotion model, §3.5 / §3.7.4):** base alert severity is scored 0–100 by "
+             "the *same* standard-detection formula as the baseline and still sets the base tier (high ≥60, "
+             "medium 40–59, low <40), but contributes only a **normalized 0–30** to the composite. The PII "
+             "context is a **bounded, weighted promotion layer** of four visible contributions whose maxima "
+             "total **exactly 100** (no cap needed): base severity 0–30, PII exposure 0–25 (T1 25 / T2 18 / "
+             "T3 8 / T4 0, primary impact), asset criticality 0–25 (secondary impact), attack complexity 5–20 "
+             "(threat likelihood), summed as `composite = base + pii + asset + complexity`. Because base "
+             "contributes at most 30, an alert on a non-PII asset maxes at **75** (inside high, below the "
+             "critical threshold of 80), so impact (25+25) outweighs likelihood (20) and a sophisticated "
+             "attack on non-sensitive data is capped at high. The critical tier is **gated on a confirmed PII "
+             "attack** — composite ≥80 **and** a Tier-1/2 PII target **and** real attack evidence (observed PII "
+             "exposure or ≥1 correlated MITRE technique), so ambient traffic on PII-holding assets does not "
+             "qualify (NIST SP 800-30r1 / 800-122 / FIPS 199).")
+    L.append("- **Actionable queues (two-tier routing, §3.5).** The enriched pipeline routes composite **≥60** "
+             "to the *priority-investigation* queue and gated composite **≥80** to the *critical immediate-"
+             "response* queue. The binary-escalation metrics (H2: high-priority volume, TPR@high, FPR@high, "
+             "alert-distribution) use the **critical** queue — the confirmed-PII-attack set surfaced for "
+             "immediate response — against the baseline high+critical set (base ≥60), the best a context-blind "
+             "SOC can prioritize. Triage speed (H1) and early detection (H3) are non-binary metrics measured "
+             "over the **≥60 priority-investigation** queue the analyst actually navigates (criticals sort to "
+             "its top by composite), against the baseline base-≥60 queue. Ground truth = `labels.is_malicious`.")
     L.append(f"- **Simulated triage-time model (H1):** deterministic; time to escalate a high-risk TP = "
              f"{fp(MET.T_READ,0)}s read + queue-depth×{fp(MET.T_PER,0)}s + context penalty "
              f"(baseline {fp(MET.C_CTX_BASELINE,0)}s manual lookup, enriched {fp(MET.C_CTX_ENRICHED,0)}s), "
@@ -293,17 +301,22 @@ def write_docx(M, pool, tests, path):
         "Design: single-environment, two-condition comparison over five scenarios. Identical events "
         "indexed twice; the only difference is the populated pii.context.* namespace in the enriched "
         "condition (baseline uses signature + threshold detection rules only).",
-        "Enriched scoring (v7 promotion model): base alert severity is scored 0–100 by the same "
-        "standard-detection formula as the baseline (high ≥60, medium 40–59, low <40) and owns the base "
-        "tier. The PII context is a bounded, weighted promotion layer: three contributions — PII exposure "
-        "(0–25, primary impact), asset criticality (0–20, secondary impact) and attack complexity (0–15, "
-        "threat likelihood) — are added to the base, giving composite = base + the three. Because impact "
-        "(≤45) outweighs likelihood (≤15), a confirmed attack on Tier-1/2 PII is promoted to CRITICAL while "
-        "a sophisticated attack on non-sensitive data is bounded at high. The CRITICAL tier is gated on a "
-        "confirmed PII attack: Tier-1/2 PII target AND real attack evidence (observed PII exposure or ≥1 "
+        "Enriched scoring (v8 promotion model, §3.5 / §3.7.4): base alert severity is scored 0–100 by the same "
+        "standard-detection formula as the baseline and still sets the base tier (high ≥60, medium 40–59, low "
+        "<40), but contributes only a normalized 0–30 to the composite. The PII context is a bounded, weighted "
+        "promotion layer of four contributions whose maxima total exactly 100: base severity (0–30), PII "
+        "exposure (0–25; T1 25 / T2 18 / T3 8 / T4 0, primary impact), asset criticality (0–25, secondary "
+        "impact) and attack complexity (5–20, threat likelihood), giving composite = base + pii + asset + "
+        "complexity. Because base contributes at most 30, an alert on a non-PII asset maxes at 75 (inside high, "
+        "below the critical threshold 80), so impact (25+25) outweighs likelihood (20) and a sophisticated "
+        "attack on non-sensitive data is bounded at high. The CRITICAL tier is gated on a confirmed PII attack: "
+        "composite ≥80 AND a Tier-1/2 PII target AND real attack evidence (observed PII exposure or ≥1 "
         "correlated MITRE technique), so ambient traffic on PII assets does not qualify (NIST SP 800-30r1/"
-        "800-122). Actionable high-priority queue: baseline = high+critical (≥60); enriched = the promoted "
-        "critical tier.",
+        "800-122). Two-tier routing (§3.5): the enriched pipeline routes composite ≥60 to the priority-"
+        "investigation queue and gated composite ≥80 to the critical immediate-response queue. The binary-"
+        "escalation metrics (H2: volume, TPR@high, FPR@high, alert-distribution) use the critical queue vs the "
+        "baseline high+critical set (base ≥60); triage speed (H1) and early detection (H3) are measured over "
+        "the ≥60 priority-investigation queue the analyst navigates vs the baseline base-≥60 queue.",
         f"Simulated triage-time model (H1): time to escalate a high-risk true positive = {MET.T_READ:.0f}s "
         f"read + queue-depth × {MET.T_PER:.0f}s + context penalty (baseline {MET.C_CTX_BASELINE:.0f}s "
         f"manual lookup, enriched {MET.C_CTX_ENRICHED:.0f}s), or {MET.T_DEFER:.0f}s if deferred. "
